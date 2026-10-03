@@ -976,9 +976,7 @@ let mpNickname = "";
 const mpOtherPlayers = {};   // sessionId -> { mesh, state }
 
 function connectMultiplayer(nickname, roomName, password, onJoinRoom) {
-const WS_HOST = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-  ? 'localhost' : location.hostname;
-mpClient = new Colyseus.Client(`ws://${WS_HOST}:2567`);
+mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
   mpNickname = nickname;
 
   (async () => {
