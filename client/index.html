@@ -987,7 +987,8 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
       mpRoom = await mpClient.joinOrCreate("battle", {
         roomKey: roomName,
         password: password || null,
-        nickname: nickname
+        nickname: nickname,
+        vehicleType: selectedVehicle
       });
       console.log("Подключились к комнате:", mpRoom.roomId, "sessionId:", mpRoom.sessionId);
 
@@ -995,7 +996,13 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
       const spawnOther = (p) => {
         if (!p || p.sessionId === mpRoom.sessionId) return;
         if (mpOtherPlayers[p.sessionId]) return;
-        const mesh = createTankBody(0x8a3a3a, false);
+
+        const vType = p.vehicleType || 'tank';
+        let mesh;
+        if (vType === 'ptur')      mesh = createPTUR(0x8a3a3a, false);
+        else if (vType === 'bmp')  mesh = createBMP(0x8a3a3a, false);
+        else                       mesh = createTankBody(0x8a3a3a, false);
+
         mesh.position.set(p.x, getHeight(p.x, p.z), p.z);
         scene.add(mesh);
 
@@ -1005,8 +1012,8 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
         label.style.display = 'none';
         document.getElementById('player-labels').appendChild(label);
 
-        mpOtherPlayers[p.sessionId] = { mesh, data: p, label };
-        console.log("+ игрок:", p.nickname, p.sessionId);
+        mpOtherPlayers[p.sessionId] = { mesh, data: p, label, vType };
+        console.log("+ игрок:", p.nickname, p.sessionId, vType);
       };
 
       // --- Обновление чужого танка ---

@@ -53,7 +53,7 @@ export class BattleRoom extends Room {
       x: 0, y: 0, z: 400,
       hullYaw: 0, turretYaw: 0, gunPitch: 0,
       health: 100,
-      vehicleType: 0
+      vehicleType: options.vehicleType || 'tank'
     };
     this.mpPlayers[client.sessionId] = p;
 
