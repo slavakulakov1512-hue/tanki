@@ -38,6 +38,8 @@
     .dev-label { position: absolute; transform: translate(-50%, -50%); text-align: center; font-family: 'Courier New', monospace; font-weight: bold; pointer-events: none; white-space: nowrap; text-shadow: 0 0 6px currentColor, 0 0 12px currentColor, 1px 1px 2px #000; }
     .dev-label-top { color: #ff2277; font-size: 14px; letter-spacing: 1px; }
     .dev-label-bottom { color: #22ff88; font-size: 12px; letter-spacing: 1px; }
+    #player-labels { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+    .player-nick-label { position: absolute; transform: translate(-50%, -50%); text-align: center; font-family: 'Courier New', monospace; font-weight: bold; font-size: 14px; letter-spacing: 1px; pointer-events: none; white-space: nowrap; color: #ffe066; text-shadow: 0 0 6px #ffe066, 0 0 12px #ff9900, 1px 1px 2px #000; display: none; }
     #main-menu, #main-menu * { cursor: auto; }
     #main-menu button, #main-menu input[type="checkbox"], #main-menu input[type="range"], #main-menu select, #main-menu label { cursor: pointer; }
     #main-menu button:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #222; }
@@ -171,6 +173,7 @@
   <div id="chill-indicator">CHILL MODE: OFF</div>
   <div id="dev-indicator">DEV MODE: OFF</div>
   <div id="dev-labels"></div>
+  <div id="player-labels"></div>
   <div id="arrow-top" class="damage-arrow" style="top:10px; left:50%; transform:translateX(-50%); border-width: 0 10px 14px 10px; border-color: transparent transparent red transparent; display:none"></div>
   <div id="arrow-bottom" class="damage-arrow" style="bottom:10px; left:50%; transform:translateX(-50%); border-width: 14px 10px 0 10px; border-color: red transparent transparent transparent; display:none"></div>
   <div id="arrow-left" class="damage-arrow" style="left:10px; top:50%; transform:translateY(-50%); border-width: 10px 14px 10px 0; border-color: transparent red transparent transparent; display:none"></div>
@@ -995,7 +998,14 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
         const mesh = createTankBody(0x8a3a3a, false);
         mesh.position.set(p.x, getHeight(p.x, p.z), p.z);
         scene.add(mesh);
-        mpOtherPlayers[p.sessionId] = { mesh, data: p };
+
+        const label = document.createElement('div');
+        label.className = 'player-nick-label';
+        label.textContent = p.nickname || 'Игрок';
+        label.style.display = 'none';
+        document.getElementById('player-labels').appendChild(label);
+
+        mpOtherPlayers[p.sessionId] = { mesh, data: p, label };
         console.log("+ игрок:", p.nickname, p.sessionId);
       };
 
@@ -1014,6 +1024,7 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
       const removeOther = (sessionId) => {
         const op = mpOtherPlayers[sessionId];
         if (op && op.mesh) scene.remove(op.mesh);
+        if (op && op.label) op.label.remove();
         delete mpOtherPlayers[sessionId];
         console.log("- игрок:", sessionId);
       };
@@ -1573,6 +1584,40 @@ function updateDevLabels() {
     const hp = Math.round(enemy.userData.health);
     const dist = Math.hypot(enemy.position.x - playerTank.position.x, enemy.position.z - playerTank.position.z);
     enemy.userData.devLabelBottom.textContent = `${hp}% | ${dist.toFixed(0)}м | ${getEnemyStateText(enemy)}`;
+  }
+}
+
+function updatePlayerNickLabels() {
+  if (!playerTank || !playerState || playerState.health <= 0) {
+    for (const sid in mpOtherPlayers) {
+      const op = mpOtherPlayers[sid];
+      if (op && op.label) op.label.style.display = 'none';
+    }
+    return;
+  }
+  const w = window.innerWidth, h = window.innerHeight;
+  const tempVec = new THREE.Vector3();
+  for (const sid in mpOtherPlayers) {
+    const op = mpOtherPlayers[sid];
+    if (!op || !op.mesh || !op.label) continue;
+    // Показываем ник только если чужой танк виден игроком (как на миникарте)
+    const visible = playerCanSeeEnemy(op.mesh);
+    if (!visible) {
+      op.label.style.display = 'none';
+      continue;
+    }
+    tempVec.copy(op.mesh.position);
+    tempVec.y += 3.5;
+    tempVec.project(camera);
+    if (tempVec.z > 1) {
+      op.label.style.display = 'none';
+      continue;
+    }
+    const sx = (tempVec.x * 0.5 + 0.5) * w;
+    const sy = (-tempVec.y * 0.5 + 0.5) * h;
+    op.label.style.left = sx + 'px';
+    op.label.style.top = sy + 'px';
+    op.label.style.display = 'block';
   }
 }
 
@@ -3064,6 +3109,13 @@ document.getElementById('btn-play').addEventListener('click', () => {
   particles.length = 0;
   if (playerTank) { scene.remove(playerTank); playerTank = null; }
   playerState = null;
+  // Чистим подписи и меши чужих игроков
+  for (const sid in mpOtherPlayers) {
+    const op = mpOtherPlayers[sid];
+    if (op.label) op.label.remove();
+    if (op.mesh) scene.remove(op.mesh);
+    delete mpOtherPlayers[sid];
+  }
   for (const z of zones) { z.capture = 0; z.owner = 'neutral'; updateZoneVisual(z); }
   document.getElementById('kills-val').textContent = '0';
   document.getElementById('health-bar-inner').style.width = '100%';
@@ -3157,6 +3209,7 @@ function animate(time){
   updateSmoke(dt);
   updateCamera(dt);
   updateDevLabels();
+  updatePlayerNickLabels();
   updateDevMarkers();
   update3DAimMarker();
   updateCrosshair();
