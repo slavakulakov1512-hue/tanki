@@ -1022,8 +1022,21 @@ mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
         if (!op || !op.mesh) return;
         op.mesh.position.set(p.x, getHeight(p.x, p.z), p.z);
         op.mesh.userData.hullGroup.rotation.y = p.hullYaw;
-        op.mesh.userData.turretGroup.rotation.y = p.turretYaw - p.hullYaw;
-        op.mesh.userData.gunGroup.rotation.x = -p.gunPitch;
+
+        if (op.vType === 'ptur') {
+          // ПТУР: вращаем launcherGroup относительно корпуса
+          const hullQuat = op.mesh.userData.hullGroup.quaternion;
+          const launcherOffset = new THREE.Vector3(0, 1.5, 0).applyQuaternion(hullQuat);
+          op.mesh.userData.launcherGroup.position.copy(launcherOffset);
+          op.mesh.userData.elevGroup.position.copy(new THREE.Vector3(0,0.9,0).applyQuaternion(hullQuat));
+          const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), p.turretYaw);
+          const qPitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), -p.gunPitch);
+          op.mesh.userData.launcherGroup.quaternion.copy(qYaw).multiply(qPitch);
+        } else {
+          // Танк и БМП: turretGroup + gunGroup
+          op.mesh.userData.turretGroup.rotation.y = p.turretYaw - p.hullYaw;
+          op.mesh.userData.gunGroup.rotation.x = -p.gunPitch;
+        }
         op.data = p;
       };
 
