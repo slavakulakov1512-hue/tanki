@@ -200,7 +200,26 @@
 
 <script type="module">
 import * as THREE from 'three';
-import * as Colyseus from 'colyseus.js';
+
+// Colyseus не импортируем статически — он грузится лениво при входе
+// в мультиплеер. Иначе, если CDN упадёт, вся игра (включая одиночный режим)
+// перестанет работать.
+let ColyseusLib = null;
+let ColyseusLoadFailed = false;
+
+async function loadColyseusLib() {
+  if (ColyseusLib) return ColyseusLib;
+  if (ColyseusLoadFailed) return null;
+  try {
+    ColyseusLib = await import('colyseus.js');
+    console.log('Colyseus загружен');
+    return ColyseusLib;
+  } catch (e) {
+    console.error('Не удалось загрузить Colyseus:', e);
+    ColyseusLoadFailed = true;
+    return null;
+  }
+}
 
 console.log('MODULE START');
 
@@ -979,10 +998,20 @@ let mpNickname = "";
 const mpOtherPlayers = {};   // sessionId -> { mesh, state }
 
 function connectMultiplayer(nickname, roomName, password, onJoinRoom) {
-mpClient = new Colyseus.Client(`wss://tanki-97z9.onrender.com`);
   mpNickname = nickname;
 
   (async () => {
+    const lib = await loadColyseusLib();
+    if (!lib) {
+      const st = document.getElementById('mp-status');
+      if (st) {
+        st.textContent = 'Сервер недоступен. Проверьте интернет или зайдите позже.';
+        st.style.color = '#f44';
+      }
+      return;
+    }
+    mpClient = new lib.Client(`wss://tanki-97z9.onrender.com`);
+
     try {
       mpRoom = await mpClient.joinOrCreate("battle", {
         roomKey: roomName,
