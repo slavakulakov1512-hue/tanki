@@ -86,50 +86,6 @@
       <button id="mp-cancel" style="width:100%; padding:8px; background:#333; color:#fff; border:2px solid #666; font-family:'Courier New', monospace; font-size:13px; cursor:pointer;">ОТМЕНА</button>
     </div>
     <button id="btn-settings" style="pointer-events: auto; width: 260px; padding: 15px 30px; font-family: 'Courier New', monospace; font-size: 20px; color: #fff; background: #555; border: 4px solid #888; box-shadow: 4px 4px 0 #222; cursor: pointer;">НАСТРОЙКИ</button>
-      <div id="settings-panel" style="display: none; margin-top: 20px; font-family: 'Courier New', monospace; font-size: 16px; color: #fff; background: rgba(0,0,0,0.8); padding: 15px; border: 2px solid #888; width: 320px; max-height: 55vh; overflow-y: auto;">
-      <label style="display:block; margin-top:15px;">
-        Преимущественный ремонт:<br>
-        <label style="display:inline-block; margin-right:15px;"><input type="radio" name="repair-priority" value="combat" checked> Боевые</label>
-        <label style="display:inline-block;"><input type="radio" name="repair-priority" value="mobility"> Ходовые</label>
-      </label>
-      <label style="display:block; margin-bottom:10px;"><input type="checkbox" id="sound-checkbox" checked> ЗВУК: ВКЛ</label>
-      <label style="display:block; margin-top:10px;">
-        Чувствительность камеры (3-е лицо): <span id="sens-3rd-val" style="color:#ffdd00;">100</span>
-        <input type="range" id="sens-3rd" min="5" max="200" step="5" value="100" style="width:100%; margin-top:4px;">
-      </label>
-      <label style="display:block; margin-top:10px;">
-        Чувствительность камеры (прицел): <span id="sens-zoom-val" style="color:#ffdd00;">100</span>
-        <input type="range" id="sens-zoom" min="5" max="200" step="5" value="100" style="width:100%; margin-top:4px;">
-      </label>
-      <label style="display:block; margin-top:10px;">
-        Отдаление камеры: <span id="cam-dist-val" style="color:#ffdd00;">100</span>
-        <input type="range" id="cam-dist" min="0" max="100" step="25" value="100" style="width:100%; margin-top:4px;">
-      </label>
-      <label style="display:block; margin-top:15px;">
-        Музыка:
-        <select id="music-select" style="width:100%; margin-top:4px; background:#222; color:#fff; border:1px solid #666; padding:6px; font-family:'Courier New', monospace; font-size:14px;">
-          <option value="calm" selected>Душевно-спокойная</option>
-          <option value="military">Армейско-напряжённая</option>
-          <option value="fun">Прикольно-веселящая</option>
-          <option value="custom">Своя музыка...</option>
-        </select>
-      </label>
-      <div id="custom-music-row" style="display:none; margin-top:8px;">
-        <input type="file" id="music-file-input" accept="audio/*" style="display:none;">
-        <button id="music-file-btn" style="width:100%; padding:8px; background:#333; color:#fff; border:2px solid #666; font-family:'Courier New', monospace; font-size:13px; cursor:pointer;">Выбрать файл...</button>
-        <div id="music-file-name" style="font-size:11px; color:#8a8; margin-top:4px; text-align:center;">файл не выбран</div>
-      </div>
-      <label style="display:block; margin-top:15px;">Боевая музыка:</label>
-      <div style="margin-top:6px;">
-        <input type="file" id="battle-music-file-input" accept="audio/*" style="display:none;">
-        <button id="battle-music-file-btn" style="width:100%; padding:8px; background:#333; color:#fff; border:2px solid #666; font-family:'Courier New', monospace; font-size:13px; cursor:pointer;">Выбрать файл...</button>
-        <div id="battle-music-file-name" style="font-size:11px; color:#8a8; margin-top:4px; text-align:center;">файл не выбран</div>
-      </div>
-      <label style="display:block; margin-top:10px;">
-        Громкость боевой музыки: <span id="battle-music-vol-val" style="color:#ffdd00;">50</span>
-        <input type="range" id="battle-music-vol" min="0" max="100" step="5" value="50" style="width:100%; margin-top:4px;">
-      </label>
-    </div>
   </div>
 
   <div id="pause-menu">
@@ -2727,6 +2683,7 @@ function updateAI(dt){
 // ---------- INPUT ----------
 const keys = {};
 let isRightMouse=false, isLeftMouse=false, isLocked=false;
+let _bypassPauseOnUnlock = false;
 window.addEventListener('keydown',e=>{
   if (gameState !== 'playing') return;
   const code = e.code;
@@ -2751,6 +2708,7 @@ window.addEventListener('keydown',e=>{
     e.preventDefault();
     if (gameState !== 'playing') return;
     if (document.pointerLockElement === renderer.domElement) {
+      _bypassPauseOnUnlock = true;
       document.exitPointerLock();
     } else {
       renderer.domElement.requestPointerLock();
@@ -2807,6 +2765,13 @@ renderer.domElement.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   isLocked = document.pointerLockElement === renderer.domElement;
   if(!isLocked && playerState) playerState.isZoomed = false;
+  // Если pointer lock отвалился, а мы всё ещё в игре — это Esc от браузера.
+  // Паузим. Но если мы сами отпустили мышь (NumpadMultiply, pauseGame,
+  // returnToMenu) — не паузим.
+  if (!isLocked && gameState === 'playing') {
+    if (_bypassPauseOnUnlock) _bypassPauseOnUnlock = false;
+    else pauseGame();
+  }
 });
 
 // ---------- DAMAGE ARROWS ----------
@@ -3189,7 +3154,10 @@ const pauseMenuEl = document.getElementById('pause-menu');
 function pauseGame() {
   if (gameState !== 'playing') return;
   gameState = 'paused';
-  if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+  if (document.pointerLockElement === renderer.domElement) {
+    _bypassPauseOnUnlock = true;
+    document.exitPointerLock();
+  }
   pauseMenuEl.style.display = 'flex';
 }
 
@@ -3231,7 +3199,10 @@ function returnToMenu() {
     if (op.mesh) scene.remove(op.mesh);
     delete mpOtherPlayers[sid];
   }
-  if (document.pointerLockElement === renderer.domElement) document.exitPointerLock();
+  if (document.pointerLockElement === renderer.domElement) {
+    _bypassPauseOnUnlock = true;
+    document.exitPointerLock();
+  }
   setUIVisibility(false);
   for (const e of enemyTanks) if (e.userData.devLabel) e.userData.devLabel.style.display = 'none';
   document.getElementById('main-menu').style.display = 'flex';
