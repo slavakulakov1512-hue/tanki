@@ -1150,6 +1150,18 @@ function connectMultiplayer(nickname, roomName, password, onJoinRoom) {
         if (op) op.data.health = health;
       });
 
+      // 6.5) У чужого игрока сломался модуль
+      mpRoom.onMessage("moduleUpdate", ({ sessionId, module, damaged, destroyed }) => {
+        const op = mpOtherPlayers[sessionId];
+        if (!op || !op.mesh) return;
+        if (op.data && op.data.modules && op.data.modules[module]) {
+          op.data.modules[module].damaged = damaged;
+          op.data.modules[module].destroyed = destroyed;
+        }
+        applyVisualDamage(op.mesh, module);
+        addHitLog(`Модуль ${op.data?.nickname || 'игрока'} сломан: ${moduleLabels[module] || module}`);
+      });
+
       // 7) Кто-то уничтожен
       mpRoom.onMessage("playerDied", ({ sessionId, killerId }) => {
         const victimOp = mpOtherPlayers[sessionId];
@@ -1949,7 +1961,7 @@ function updateProjectiles(dt){
           break;
         }
 
-        // ===== Попадание в ЧУЖОГО ИГРОКА: урон считаем, но применяет сервер =====
+        // ===== Попадание в ЧУЖОГО ИГРОКА =====
         if (entry.isRemote) {
           let attach = obj.object;
           while(attach){ if(attach.name==='hull'||attach.name==='turret'||attach.name==='elevation'||attach.name==='traverse'||attach.name==='launcher') break; attach=attach.parent; }
@@ -1957,12 +1969,33 @@ function updateProjectiles(dt){
           const localPoint = attach ? attach.worldToLocal(point.clone()) : new THREE.Vector3();
           const rType = target.userData.type || 'tank';
           const modName = getHitModuleName(obj.object, localPoint, attachName, rType);
+
+          if (p.isMG) {
+            // Пулемёт: HP не трогаем, только счётчики попаданий на сервере.
+            if (mpRoom) {
+              mpRoom.send("mgHit", { targetId: entry.sessionId, module: modName });
+              addHitLog(`MG в ${(mpOtherPlayers[entry.sessionId]?.data?.nickname) || 'игрока'}: ${moduleLabels[modName] || 'корпус'}`);
+            }
+            addBulletHole(target, point, normal, obj.object);
+            spawnParticles(point, 4, 0xffcc44, 0.3, 0.25);
+            sfx.hit();
+            removeProjectile(i);
+            hit = true;
+            break;
+          }
+
           spawnParticles(point, 8, 0xffaa00, 0.4, 0.3);
           addBulletHole(target, point, normal, obj.object);
           sfx.hit();
           if (mpRoom) {
             const baseDmg = p.isRocket ? 40 : (p.isAutocannon ? 5 : 20);
-            mpRoom.send("hit", { targetId: entry.sessionId, damage: baseDmg, module: modName });
+            mpRoom.send("hit", {
+              targetId: entry.sessionId,
+              damage: baseDmg,
+              module: modName,
+              isRocket: p.isRocket || false,
+              isAutocannon: p.isAutocannon || false
+            });
             addHitLog(`Попадание в ${(mpOtherPlayers[entry.sessionId]?.data?.nickname) || 'игрока'}: -${baseDmg} (${moduleLabels[modName] || 'корпус'})`);
           }
           removeProjectile(i);
