@@ -52,6 +52,9 @@
     #pause-menu, #pause-menu * { cursor: auto; }
     .menu-btn { width: 260px; padding: 15px 30px; font-family: 'Courier New', monospace; font-size: 20px; color: #fff; background: #555; border: 4px solid #888; box-shadow: 4px 4px 0 #222; cursor: pointer; margin-bottom: 20px; }
     .menu-btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #222; }
+    #fps-counter { position: fixed; bottom: 8px; left: 10px; font-family: 'Courier New', monospace; font-size: 12px; letter-spacing: 1px; color: #6a7a6a; text-shadow: 1px 1px 2px #000; pointer-events: none; z-index: 9999; }
+    #fps-counter.warn { color: #c8a040; }
+    #fps-counter.bad  { color: #d04040; }
   </style>
 </head>
 <body>
@@ -203,6 +206,7 @@
   <div id="damage-panel" style="display:none"><canvas id="damage-canvas" width="200" height="320"></canvas></div>
   <div id="minimap" style="display:none"><canvas id="minimap-canvas" width="140" height="140"></canvas></div>
   <div id="hint">Выберите технику и нажмите ИГРАТЬ</div>
+  <div id="fps-counter">FPS: --</div>
 </div>
 
 <script type="importmap">
@@ -1150,8 +1154,22 @@ function connectMultiplayer(nickname, roomName, password, onJoinRoom) {
         if (op) op.data.health = health;
       });
 
-      // 6.5) У чужого игрока сломался модуль
+      // 6.5) У кого-то сломался модуль
       mpRoom.onMessage("moduleUpdate", ({ sessionId, module, damaged, destroyed }) => {
+        // Если это МЫ — обновляем свои модули, применяем визуал и HUD.
+        // Без этой ветки у жертвы не активируется арк-режим и не краснеет панель.
+        if (sessionId === mpRoom.sessionId) {
+          if (playerState && playerState.modules && playerState.modules[module]) {
+            playerState.modules[module].damaged = damaged;
+            playerState.modules[module].destroyed = destroyed;
+            if (damaged || destroyed) playerState.modules[module].hp = 0;
+            if (playerTank) applyVisualDamage(playerTank, module);
+            updateDamageUI();
+            addHitLog(`Наш модуль сломан: ${moduleLabels[module] || module}`);
+          }
+          return;
+        }
+        // Иначе — чужой игрок
         const op = mpOtherPlayers[sessionId];
         if (!op || !op.mesh) return;
         if (op.data && op.data.modules && op.data.modules[module]) {
@@ -1935,16 +1953,43 @@ function updateProjectiles(dt){
       const segLen = segA.distanceTo(segB);
       const subSteps = Math.max(2, Math.ceil(segLen / 1.5));
       let intersects = null;
-      const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _dir = new THREE.Vector3();
-      for (let s = 0; s < subSteps; s++) {
-        const t0 = s / subSteps, t1 = (s + 1) / subSteps;
-        _a.lerpVectors(segA, segB, t0); _b.lerpVectors(segA, segB, t1);
-        _dir.copy(_b).sub(_a); const dLen = _dir.length();
-        if (dLen < 0.001) continue;
-        _dir.normalize();
-        const subRay = new THREE.Raycaster(_a, _dir, 0, dLen + 0.5);
-        const subHits = subRay.intersectObjects(target.userData.allHitMeshes, false);
-        if (subHits.length) { intersects = subHits; break; }
+      {
+        // Суб-шаги по 0.6 u — в 2.5 раза плотнее, чем было.
+        // Так быстрые снаряды не «проскакивают» мимо тонких мешей.
+        const _subSteps = Math.max(3, Math.ceil(segLen / 0.6));
+        const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _dir = new THREE.Vector3();
+        for (let s = 0; s < _subSteps; s++) {
+          const t0 = s / _subSteps, t1 = (s + 1) / _subSteps;
+          _a.lerpVectors(segA, segB, t0); _b.lerpVectors(segA, segB, t1);
+          _dir.copy(_b).sub(_a); const dLen = _dir.length();
+          if (dLen < 0.001) continue;
+          _dir.normalize();
+          const subRay = new THREE.Raycaster(_a, _dir, 0, dLen + 0.6);
+          const subHits = subRay.intersectObjects(target.userData.allHitMeshes, false);
+          if (subHits.length) { intersects = subHits; break; }
+        }
+        // Fallback: если ни один суб-луч не дал пересечения, но сам отрезок
+        // проходит через bbox цели — считаем попаданием. Это ловит случаи,
+        // когда снаряд уже внутри меша (луч выходит наружу, Raycaster молчит).
+        if (!intersects) {
+          let bbox = target.userData._worldBBox;
+          if (!bbox) { bbox = new THREE.Box3(); target.userData._worldBBox = bbox; }
+          bbox.setFromObject(target);
+          const dir = segB.clone().sub(segA);
+          const segLen2 = dir.length();
+          if (segLen2 > 0.001) {
+            dir.normalize();
+            const ray = new THREE.Ray(segA, dir);
+            const point = new THREE.Vector3();
+            if (ray.intersectBox(bbox, point)) {
+              intersects = [{
+                point: point.clone(),
+                face: { normal: new THREE.Vector3(0, 1, 0) },
+                object: (target.userData.allHitMeshes && target.userData.allHitMeshes[0]) || target
+              }];
+            }
+          }
+        }
       }
       if(intersects && intersects.length>0){
         const obj = intersects[0];
@@ -3473,6 +3518,28 @@ document.getElementById('sound-checkbox').addEventListener('change', (e)=>{
   }
 });
 
+// ---------- FPS СЧЁТЧИК ----------
+const fpsEl = document.getElementById('fps-counter');
+let _fpsFrameCount = 0;
+let _fpsAccumTime = 0;
+let _fpsLastValue = 0;
+function _fpsTick(dt) {
+  _fpsFrameCount++;
+  _fpsAccumTime += dt;
+  if (_fpsAccumTime >= 0.3) {
+    const fps = Math.round(_fpsFrameCount / _fpsAccumTime);
+    _fpsFrameCount = 0;
+    _fpsAccumTime = 0;
+    if (fps !== _fpsLastValue) {
+      _fpsLastValue = fps;
+      fpsEl.textContent = 'FPS: ' + fps;
+      fpsEl.classList.remove('warn', 'bad');
+      if (fps < 20) fpsEl.classList.add('bad');
+      else if (fps < 35) fpsEl.classList.add('warn');
+    }
+  }
+}
+
 // ---------- LOOP ----------
 let lastTime = performance.now();
 function animate(time){
@@ -3480,6 +3547,10 @@ function animate(time){
   let dt = (time-lastTime)/1000;
   lastTime = time;
   if(dt>0.2) dt=0.2;
+
+  // Счётчик считаем в любом состоянии — и в меню, и в игре, и на паузе
+  _fpsTick(dt);
+
   if (gameState === 'menu') {
     menuAngle += dt * 0.15;
     menuCamera.position.x = Math.sin(menuAngle) * 400;
