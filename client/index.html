@@ -1554,8 +1554,8 @@ document.getElementById('battle-music-file-input').addEventListener('change', (e
   if (battleMusicUrl) { try { URL.revokeObjectURL(battleMusicUrl); } catch(err){} }
   battleMusicUrl = URL.createObjectURL(file);
   if (battleMusicAudio) { try { battleMusicAudio.pause(); } catch(err){} battleMusicAudio = null; }
-  // Если уже в бою и звук включён — сразу подхватить новый файл
-  if (gameState === 'playing' && soundEnabled && battleMusicVolume > 0) {
+  // Если мы в бою ИЛИ на паузе — сразу подхватить новый файл
+  if ((gameState === 'playing' || gameState === 'paused') && soundEnabled && battleMusicVolume > 0) {
     if (battleMusicPlaying) stopBattleMusic();
     startBattleMusic();
   }
@@ -3169,6 +3169,13 @@ function resumeGame() {
   if (gameState !== 'paused') return;
   gameState = 'playing';
   pauseMenuEl.style.display = 'none';
+  // На случай если в паузе переключали музыку/звук — восстановим
+  if (soundEnabled && !battleMusicPlaying && battleMusicUrl && battleMusicVolume > 0) {
+    startBattleMusic();
+  }
+  if (soundEnabled && !engineOsc1) {
+    startEngineSound();
+  }
   // Возвращаем pointer lock
   renderer.domElement.requestPointerLock();
 }
@@ -3329,7 +3336,7 @@ document.getElementById('sound-checkbox').addEventListener('change', (e)=>{
   if (!soundEnabled) { stopMenuMusic(); stopEngineSound(); stopBattleMusic(); }
   else {
     if (gameState === 'menu') startMenuMusic();
-    if (gameState === 'playing') { startEngineSound(); startBattleMusic(); }
+    if (gameState === 'playing' || gameState === 'paused') { startEngineSound(); startBattleMusic(); }
   }
 });
 
