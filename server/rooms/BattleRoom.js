@@ -32,8 +32,12 @@ export class BattleRoom extends Room {
     this.onMessage("hit", (client, data) => {
       const target = this.mpPlayers[data.targetId];
       if (!target) return;
+      if (target.health <= 0) return;   // уже мёртв, не считаем повторно
       target.health = Math.max(0, target.health - (data.damage || 0));
       this.broadcast("healthUpdate", { sessionId: data.targetId, health: target.health });
+      if (target.health <= 0) {
+        this.broadcast("playerDied", { sessionId: data.targetId, killerId: client.sessionId });
+      }
     });
 
     console.log(`[${this.roomId}] создана: "${this.customRoomName}", пароль: ${this.roomPassword ? "да" : "нет"}`);

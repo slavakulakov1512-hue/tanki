@@ -1122,15 +1122,59 @@ function connectMultiplayer(nickname, roomName, password, onJoinRoom) {
         updateOther(p);
       });
 
-      // 5) Чужой выстрел — пока только лог
+      // 5) Чужой выстрел — создаём снаряд визуально (без локального урона)
       mpRoom.onMessage("shoot", (data) => {
-        console.log("Чужой выстрел:", data);
+        const origin = new THREE.Vector3(data.origin.x, data.origin.y, data.origin.z);
+        const dir = new THREE.Vector3(data.dir.x, data.dir.y, data.dir.z).normalize();
+        const speed = data.speed || (data.type === 'ptur' ? 100 : 360);
+        const isRocket = data.type === 'ptur';
+        const isAutocannon = data.type === 'bmp';
+        const proj = createProjectile(origin, dir, speed, false, isRocket, isAutocannon);
+        proj.isRemote = true;
+        spawnParticles(origin, isAutocannon ? 4 : 8, 0xffaa00, 0.4, 0.25, 0.05);
       });
 
       // 6) Здоровье изменилось
       mpRoom.onMessage("healthUpdate", ({ sessionId, health }) => {
+        // Если это мы — обновляем свой HUD
+        if (sessionId === mpRoom.sessionId) {
+          if (playerState) {
+            const prev = playerState.health;
+            playerState.health = health;
+            updatePlayerHealthUI();
+            if (health < prev) addHitLog(`Нас зацепило: -${prev - health}`);
+          }
+          return;
+        }
         const op = mpOtherPlayers[sessionId];
         if (op) op.data.health = health;
+      });
+
+      // 7) Кто-то уничтожен
+      mpRoom.onMessage("playerDied", ({ sessionId, killerId }) => {
+        const victimOp = mpOtherPlayers[sessionId];
+        const victimNick = victimOp ? (victimOp.data.nickname || sessionId) : sessionId;
+        let killerNick;
+        if (killerId === mpRoom.sessionId) killerNick = mpNickname;
+        else {
+          const killerOp = mpOtherPlayers[killerId];
+          killerNick = killerOp ? (killerOp.data.nickname || killerId) : killerId;
+        }
+        addHitLog(`Игрок ${killerNick} убил игрока ${victimNick}`);
+
+        if (sessionId !== mpRoom.sessionId) {
+          // Убрать чужой танк с карты
+          const op = mpOtherPlayers[sessionId];
+          if (op && op.mesh) {
+            // Небольшой взрыв на месте
+            spawnParticles(op.mesh.position.clone().add(new THREE.Vector3(0,1.5,0)), 40, 0xff4400, 3, 1.5);
+            sfx.explosion();
+          }
+          removeOther(sessionId);
+        } else {
+          // Нас убили — заглушка до меню смерти
+          document.getElementById('hint').textContent = `Вас убил игрок ${killerNick}. Esc — пауза, Пробел — меню.`;
+        }
       });
 
       if (onJoinRoom) onJoinRoom(mpRoom);
@@ -1432,6 +1476,16 @@ function shootTank(tank, isPlayer){
   createProjectile(muzzle, dir, speed, isPlayer, isRocket, isAutocannon);
   spawnParticles(muzzle, isAutocannon?4:8, 0xffaa00, 0.4, 0.25, 0.05);
   if(isRocket) sfx.rocket(); else if(isAutocannon) sfx.autocannon(); else sfx.shoot();
+
+  // В мультиплеере рассылаем выстрел остальным — они рисуют снаряд у себя
+  if (isPlayer && mpRoom) {
+    mpRoom.send("shoot", {
+      origin: { x: muzzle.x, y: muzzle.y, z: muzzle.z },
+      dir: { x: dir.x, y: dir.y, z: dir.z },
+      speed: speed,
+      type: type
+    });
+  }
 
   if(isPlayer){
     if(type==='ptur'){
@@ -1846,9 +1900,24 @@ function updateProjectiles(dt){
       }
       if(bHit){ spawnParticles(bHit.point.clone(), 10, 0xffaa00, 0.5, 0.5); sfx.hit(); removeProjectile(i); continue; }
     }
-    const targets = p.isPlayer ? [...enemyTanks, ...destroyedTanks] : [playerTank, ...destroyedTanks];
+    // Собираем список целей.
+    // Для снаряда игрока — включая чужих игроков (у них есть sessionId).
+    const targets = [];
+    if (p.isPlayer) {
+      for (const sid in mpOtherPlayers) {
+        const op = mpOtherPlayers[sid];
+        if (op && op.mesh) targets.push({ obj: op.mesh, sessionId: sid, isRemote: true });
+      }
+      for (const t of enemyTanks) targets.push({ obj: t, sessionId: null, isRemote: false });
+      for (const t of destroyedTanks) targets.push({ obj: t, sessionId: null, isRemote: false });
+    } else {
+      if (playerTank) targets.push({ obj: playerTank, sessionId: null, isRemote: false });
+      for (const t of destroyedTanks) targets.push({ obj: t, sessionId: null, isRemote: false });
+    }
+
     let hit = false;
-    for(const target of targets){
+    for(const entry of targets){
+      const target = entry.obj;
       if(target === playerTank && p.isPlayer) continue;
       const segA = p.prevPos, segB = p.group.position;
       const segLen = segA.distanceTo(segB);
@@ -1869,6 +1938,37 @@ function updateProjectiles(dt){
         const obj = intersects[0];
         const point = obj.point.clone();
         const normal = obj.face.normal.clone().transformDirection(obj.object.matrixWorld);
+
+        // ===== Снаряд от другого игрока: только визуал, урон придёт через healthUpdate =====
+        if (p.isRemote) {
+          spawnParticles(point, 8, 0xffaa00, 0.4, 0.3);
+          addBulletHole(target, point, normal, obj.object);
+          sfx.hit();
+          removeProjectile(i);
+          hit = true;
+          break;
+        }
+
+        // ===== Попадание в ЧУЖОГО ИГРОКА: урон считаем, но применяет сервер =====
+        if (entry.isRemote) {
+          let attach = obj.object;
+          while(attach){ if(attach.name==='hull'||attach.name==='turret'||attach.name==='elevation'||attach.name==='traverse'||attach.name==='launcher') break; attach=attach.parent; }
+          const attachName = attach ? attach.name : 'hull';
+          const localPoint = attach ? attach.worldToLocal(point.clone()) : new THREE.Vector3();
+          const rType = target.userData.type || 'tank';
+          const modName = getHitModuleName(obj.object, localPoint, attachName, rType);
+          spawnParticles(point, 8, 0xffaa00, 0.4, 0.3);
+          addBulletHole(target, point, normal, obj.object);
+          sfx.hit();
+          if (mpRoom) {
+            const baseDmg = p.isRocket ? 40 : (p.isAutocannon ? 5 : 20);
+            mpRoom.send("hit", { targetId: entry.sessionId, damage: baseDmg, module: modName });
+            addHitLog(`Попадание в ${(mpOtherPlayers[entry.sessionId]?.data?.nickname) || 'игрока'}: -${baseDmg} (${moduleLabels[modName] || 'корпус'})`);
+          }
+          removeProjectile(i);
+          hit = true;
+          break;
+        }
 
         if (target === playerTank && obj.object.name === 'mgMesh' && !playerTank.userData.mgBroken) {
           playerTank.userData.mgBroken = true;
